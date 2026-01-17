@@ -1,9 +1,10 @@
 import time
 from snake_env import SnakeEnv, EnvConfig
 
+
 def main():
-    env = SnakeEnv(EnvConfig(grid_size=15), render_mode="human")
-    env.reset()
+    env = SnakeEnv(EnvConfig(grid_size=15, max_steps=500, seed=0), render_mode="human")
+    env.reset(seed=0)
 
     try:
         while True:
@@ -11,9 +12,8 @@ def main():
             if not alive:
                 break
 
-            mode = env.get_control_mode()
-
-            if mode == "human":
+            # Human mode: do NOT move unless a keypress action exists
+            if env.get_control_mode() == "human":
                 action = env.pop_human_action()
                 if action is None:
                     time.sleep(0.01)
@@ -24,10 +24,11 @@ def main():
             _, _, terminated, truncated, _ = env.step(action)
 
             if terminated or truncated:
-                env.reset()
+                env.reset(seed=0)
 
     finally:
         env.close()
+
 
 if __name__ == "__main__":
     main()
