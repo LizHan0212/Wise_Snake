@@ -22,7 +22,6 @@ class EnvConfig:
 
     window_scale: float = 1.5
 
-
 class SnakeEnv(gym.Env):
     metadata = {"render_modes": ["human", "ansi"], "render_fps": 12}
 
