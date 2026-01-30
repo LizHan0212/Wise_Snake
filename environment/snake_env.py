@@ -9,9 +9,12 @@ from gymnasium import spaces
 class EnvConfig:
     grid_size: int = 15
     max_steps: int = 500
-    seed: int = 0
 
-    barrier_count: int = 4
+    # If None => random session seed chosen once per program run (new window => new layout)
+    # Restart button will reuse the same session seed (same layout within the same run)
+    seed: Optional[int] = None
+
+    barrier_count: int = 7
     turn_penalty: float = -0.2
 
     # fruit counts by reward: 1x(+5), 2x(+3), 4x(+1) => 7 total
@@ -51,7 +54,13 @@ class SnakeEnv(gym.Env):
         self.action_space = spaces.Discrete(4)
         self.observation_space = spaces.Box(low=0, high=4, shape=(n, n), dtype=np.int8)
 
-        self._rng = np.random.default_rng(self.cfg.seed)
+        # New env every time restarts
+        if self.cfg.seed is None:
+            self._session_seed = int(np.random.default_rng().integers(0, 2**31 - 1))
+        else:
+            self._session_seed = int(self.cfg.seed)
+
+        self._rng = np.random.default_rng(self._session_seed)
 
         # state
         self._snake: List[Tuple[int, int]] = []
@@ -64,7 +73,7 @@ class SnakeEnv(gym.Env):
         self._total_reward = 0.0
 
         # interactive control
-        self._control_mode = "auto"  # "auto" or "human"
+        self._control_mode = "auto"
         self._pending_action: Optional[int] = None
 
         # pygame (lazy)
@@ -80,7 +89,12 @@ class SnakeEnv(gym.Env):
         self._margin = None
         self._hud = None
 
-    # ---------------- public helpers for env_test ----------------
+        # game-over overlay
+        self._game_over = False
+        self._restart_button = None
+        self._restart_hover = False
+
+    # ---------------- public helpers for runners ----------------
     def get_control_mode(self) -> str:
         return self._control_mode
 
@@ -89,11 +103,20 @@ class SnakeEnv(gym.Env):
         self._pending_action = None
         return a
 
+    def is_game_over(self) -> bool:
+        return self._game_over
+
+    def get_session_seed(self) -> int:
+        return self._session_seed
+
     # ---------------- Gym API ----------------
     def reset(self, *, seed: Optional[int] = None, options=None):
         super().reset(seed=seed)
-        if seed is not None:
-            self._rng = np.random.default_rng(seed)
+
+        if seed is None:
+            seed = self._session_seed
+
+        self._rng = np.random.default_rng(int(seed))
 
         n = self.cfg.grid_size
         self._steps = 0
@@ -101,10 +124,24 @@ class SnakeEnv(gym.Env):
         self._quit_requested = False
         self._total_reward = 0.0
 
-        r = n // 2
-        c = n // 2
-        self._snake = [(r, c), (r, c - 1), (r, c - 2)]
-        self._dir = (0, 1)
+        # clear game-over overlay
+        self._game_over = False
+        self._restart_button = None
+        self._restart_hover = False
+
+        # RANDOMIZE start each reset (but deterministic given the seed)
+        dir_options = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        self._dir = dir_options[int(self._rng.integers(0, 4))]
+        dr, dc = self._dir
+
+        while True:
+            hr = int(self._rng.integers(0, n))
+            hc = int(self._rng.integers(0, n))
+            body1 = (hr - dr, hc - dc)
+            body2 = (hr - 2 * dr, hc - 2 * dc)
+            if self._in_bounds((hr, hc)) and self._in_bounds(body1) and self._in_bounds(body2):
+                self._snake = [(hr, hc), body1, body2]
+                break
 
         self._barriers = set()
         self._fruit = {}
@@ -115,6 +152,10 @@ class SnakeEnv(gym.Env):
         return self._make_obs(), {}
 
     def step(self, action: int):
+        # freeze dynamics while game-over overlay is active
+        if self._game_over:
+            return self._make_obs(), 0.0, True, False, {}
+
         if self._terminated:
             raise RuntimeError("Episode ended. Call reset() before step().")
 
@@ -139,6 +180,7 @@ class SnakeEnv(gym.Env):
         # termination checks
         if (not self._in_bounds(new_head)) or (new_head in self._snake) or (new_head in self._barriers):
             self._terminated = True
+            self._game_over = True
             self._total_reward += reward
             return self._make_obs(), reward, True, False, {}
 
@@ -264,8 +306,23 @@ class SnakeEnv(gym.Env):
 
         self._pg_inited = True
 
+    def _button_rect(self):
+        w = self._screen.get_width()
+        h = self._screen.get_height()
+        bw = int(180 * self.cfg.window_scale)
+        bh = int(52 * self.cfg.window_scale)
+        x = w // 2 - bw // 2
+        y = h // 2 - bh // 2
+        return self._pg.Rect(x, y, bw, bh)
+
     def _handle_input(self):
         pygame = self._pg
+
+        if self._game_over and self._screen is not None:
+            mx, my = pygame.mouse.get_pos()
+            rect = self._restart_button if self._restart_button is not None else self._button_rect()
+            self._restart_hover = rect.collidepoint(mx, my)
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self._quit_requested = True
@@ -278,10 +335,9 @@ class SnakeEnv(gym.Env):
 
                 if event.key == pygame.K_h:
                     self._control_mode = "human" if self._control_mode == "auto" else "auto"
-                    self._pending_action = None  # clear queued action on toggle
+                    self._pending_action = None
                     return
 
-                # queue one action (human mode will consume it; auto can ignore)
                 if event.key in (pygame.K_UP, pygame.K_w):
                     self._pending_action = 0
                 elif event.key in (pygame.K_DOWN, pygame.K_s):
@@ -290,6 +346,44 @@ class SnakeEnv(gym.Env):
                     self._pending_action = 2
                 elif event.key in (pygame.K_RIGHT, pygame.K_d):
                     self._pending_action = 3
+
+                if self._game_over and event.key == pygame.K_r:
+                    # restart using session seed -> same layout within the same run
+                    self.reset(seed=None)
+                    return
+
+            if self._game_over and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                rect = self._restart_button if self._restart_button is not None else self._button_rect()
+                if rect.collidepoint(event.pos):
+                    # restart using session seed -> same layout within the same run
+                    self.reset(seed=None)
+                    return
+
+    def _draw_game_over_overlay(self):
+        pygame = self._pg
+        w, h = self._screen.get_size()
+
+        overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        self._screen.blit(overlay, (0, 0))
+
+        title = self._font.render("GAME OVER", True, (255, 80, 80))
+        title_rect = title.get_rect(center=(w // 2, h // 2 - int(70 * self.cfg.window_scale)))
+        self._screen.blit(title, title_rect)
+
+        rect = self._button_rect()
+        self._restart_button = rect
+
+        btn_color = (80, 190, 80) if self._restart_hover else (60, 160, 60)
+        pygame.draw.rect(self._screen, btn_color, rect, border_radius=12)
+
+        label = self._font.render("Restart", True, (255, 255, 255))
+        label_rect = label.get_rect(center=rect.center)
+        self._screen.blit(label, label_rect)
+
+        hint = self._font.render("Click Restart or press R", True, (220, 220, 220))
+        hint_rect = hint.get_rect(center=(w // 2, h // 2 + int(70 * self.cfg.window_scale)))
+        self._screen.blit(hint, hint_rect)
 
     def _render_pygame(self):
         if not self._pg_inited:
@@ -305,7 +399,6 @@ class SnakeEnv(gym.Env):
 
         self._screen.fill((20, 20, 20))
 
-        # HUD
         pygame.draw.rect(self._screen, (15, 15, 15), (0, 0, self._screen.get_width(), self._hud))
         hud_text = (
             f"Mode: {self._control_mode.upper()}   "
@@ -317,7 +410,6 @@ class SnakeEnv(gym.Env):
         surf = self._font.render(hud_text, True, (230, 230, 230))
         self._screen.blit(surf, (10, 8))
 
-        # colors
         empty = (35, 35, 35)
         head = (0, 200, 0)
         body = (0, 120, 0)
@@ -349,6 +441,9 @@ class SnakeEnv(gym.Env):
                     pygame.Rect(x, y, self._cell, self._cell),
                     border_radius=6,
                 )
+
+        if self._game_over:
+            self._draw_game_over_overlay()
 
         pygame.display.flip()
         self._clock.tick(self.cfg.render_fps)
