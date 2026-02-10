@@ -15,7 +15,7 @@ class EnvConfig:
     seed: Optional[int] = None
 
     barrier_count: int = 7
-    turn_penalty: float = -0.2
+    turn_penalty: float = -0.05
 
     # fruit counts by reward: 1x(+5), 2x(+3), 4x(+1) => 7 total
     fruit_spec: Tuple[Tuple[int, int], ...] = ((5, 1), (3, 2), (1, 4))
@@ -171,6 +171,9 @@ class SnakeEnv(gym.Env):
         if new_dir != self._dir:
             reward += self.cfg.turn_penalty
 
+        # penalize steps where the snake does nothing to deter infinite circles
+        reward += -0.05
+
         self._dir = new_dir
 
         head_r, head_c = self._snake[0]
@@ -181,6 +184,10 @@ class SnakeEnv(gym.Env):
         if (not self._in_bounds(new_head)) or (new_head in self._snake) or (new_head in self._barriers):
             self._terminated = True
             self._game_over = True
+
+            # added penalty for game over so the snake learns to avoid death
+            reward -= 3
+
             self._total_reward += reward
             return self._make_obs(), reward, True, False, {}
 

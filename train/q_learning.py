@@ -124,11 +124,20 @@ def encode_state(obs: np.ndarray) -> int:
         state = (state << 1) | int(b)
     return state
 
+def _epsilon_greedy(Q: np.ndarray, s: int, eps: float, obs: np.ndarray) -> int:
+    valid_actions = _generate_valid_actions(obs)
 
-def _epsilon_greedy(Q: np.ndarray, s: int, eps: float) -> int:
     if random.random() < eps:
-        return random.randint(0, 3)
-    return int(np.argmax(Q[s]))
+        return random.choice(valid_actions)
+
+    best_a = valid_actions[0]
+    best_q = float(Q[s, best_a])
+    for a in valid_actions[1:]:
+        q = float(Q[s, a])
+        if q > best_q:
+            best_q = q
+            best_a = a
+    return int(best_a)
 
 
 def train(cfg: QTrainConfig) -> np.ndarray:
@@ -148,6 +157,8 @@ def train(cfg: QTrainConfig) -> np.ndarray:
     eps = cfg.eps_start
     recent_returns = []
     recent_lengths = []
+    recent_snake_lengths = []
+    recent_fruits = []
 
     for ep in range(1, cfg.episodes + 1):
         # vary episode seed but remain reproducible
@@ -160,10 +171,11 @@ def train(cfg: QTrainConfig) -> np.ndarray:
         truncated = False
 
         while (not terminated) and (not truncated) and ep_steps < cfg.max_steps_per_episode:
-            a = _epsilon_greedy(Q, s, eps)
+            a = _epsilon_greedy(Q, s, eps, obs)
 
             obs2, r, terminated, truncated, _ = env.step(a)
             s2 = encode_state(obs2)
+            obs = obs2
 
             best_next = float(np.max(Q[s2]))
             td_target = float(r) + cfg.gamma * best_next * (0.0 if terminated else 1.0)
@@ -177,20 +189,58 @@ def train(cfg: QTrainConfig) -> np.ndarray:
 
         recent_returns.append(ep_return)
         recent_lengths.append(ep_steps)
+        final_length = len(env._snake)
+        fruits_eaten = final_length - 3 # removing 3 since init len == 3
+
+        recent_snake_lengths.append(final_length)
+        recent_fruits.append(fruits_eaten)
+
         if len(recent_returns) > cfg.log_every:
             recent_returns.pop(0)
             recent_lengths.pop(0)
+            recent_snake_lengths.pop(0)
+            recent_fruits.pop(0)
 
         if ep % cfg.log_every == 0:
             avg_ret = sum(recent_returns) / len(recent_returns)
             avg_len = sum(recent_lengths) / len(recent_lengths)
-            print(f"Episode {ep:5d} | eps={eps:.3f} | avg_return={avg_ret:.2f} | avg_steps={avg_len:.1f}")
+            avg_snake_len = sum(recent_snake_lengths) / len(recent_snake_lengths)
+            avg_fruits = sum(recent_fruits) / len(recent_fruits)
 
+            print(
+                f"Episode {ep:5d} | eps={eps:.3f} | "
+                f"avg_return={avg_ret:.2f} | avg_steps={avg_len:.1f} | "
+                f"avg_len={avg_snake_len:.1f} | avg_fruit={avg_fruits:.1f}"
+            )
     env.close()
 
     np.save(cfg.save_path, Q)
     print(f"Saved Q-table to: {cfg.save_path}")
     return Q
+
+def _generate_valid_actions(obs: np.ndarray) -> list[int]:
+    """
+    Helper function called by _epsilon_greedy(). Returns set of valid actions,
+    masking out backwards moves so agent doesn't waste resources exploring backwards moves.
+
+    Created because environment prevented backwards moves, but agent was 
+    still able to explore backwards move actions.
+    """
+    dr, dc = _infer_direction_from_obs(obs)
+
+    # map action to direction (same as env)
+    action_dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+    # illegal action is the one that is exact opposite of current dir
+    illegal = None
+    for a, (adr, adc) in enumerate(action_dirs):
+        if adr == -dr and adc == -dc:
+            illegal = a
+            break
+
+    if illegal is None:
+        return [0, 1, 2, 3]
+    return [a for a in range(4) if a != illegal]
 
 
 def main():
