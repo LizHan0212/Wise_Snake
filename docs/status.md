@@ -46,6 +46,7 @@ Episode termination:
 - Collision with wall
 - Collision with barrier
 - Collision with snake body
+
 <img width="500" height="350" alt="photo3" src="https://github.com/user-attachments/assets/e8b5e199-f9be-4b44-b14a-1f24d9039e57" />
 
 ### Reward Function 
