@@ -9,7 +9,8 @@ WiseSnake is an AI trained to play an enhanced version of the classic Snake game
 
 # Project Links
 
-**Source code:** (https://github.com/LizHan0212/Wise_Snake)
+**Source code:** 
+- https://github.com/LizHan0212/Wise_Snake
 
 **Reports:**
 - [Proposal](proposal.html)
