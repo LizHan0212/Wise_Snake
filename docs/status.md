@@ -143,6 +143,7 @@ Deep Q-Network (DQN)
 
 ## Resources Used
 
+- OpenAI's Gymnasium
 - NumPy
 - PyTorch (via SB3)
 
