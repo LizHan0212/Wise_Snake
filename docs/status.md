@@ -46,8 +46,7 @@ Episode termination:
 - Collision with wall
 - Collision with barrier
 - Collision with snake body
-
----
+<img width="500" height="350" alt="photo3" src="https://github.com/user-attachments/assets/e8b5e199-f9be-4b44-b14a-1f24d9039e57" />
 
 ### Reward Function 
 
@@ -73,7 +72,7 @@ Additional improvements:
 - This prevents unnecessary branching in Q-table updates.
 - Added a real-time rendering module to visually observe learning behavior (used for qualitative analysis).
 
-
+<img width="300" height="400" alt="photo1" src="https://github.com/user-attachments/assets/59acd81c-3c4c-4e45-875f-17373b4f9275" />            <img width="300" height="400" alt="47c5c4bbdefc9e1d1175abc2255870bd" src="https://github.com/user-attachments/assets/4c008fef-642e-4378-a4c8-1c509cc31bb4" />
 ### Deep Q-Network (DQN)
 
 
