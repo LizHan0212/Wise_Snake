@@ -3,6 +3,8 @@ layout: default
 title: Status
 ---
 
+## [Status Update Video](https://www.youtube.com/watch?v=O4RZL-xyF6M)
+
 ## Project Summary
 
 WiseSnake trains an agent to play an enhanced version of the Snake game in a 15×15 grid environment with multiple fruit types and randomly generated barriers. The objective is to maximize cumulative reward while avoiding collisions with walls, barriers, or the snake’s own body.
