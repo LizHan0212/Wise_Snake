@@ -76,6 +76,23 @@ Additional improvements:
 <img width="300" height="400" alt="photo1" src="https://github.com/user-attachments/assets/59acd81c-3c4c-4e45-875f-17373b4f9275" />            <img width="300" height="400" alt="47c5c4bbdefc9e1d1175abc2255870bd" src="https://github.com/user-attachments/assets/4c008fef-642e-4378-a4c8-1c509cc31bb4" />
 ### Deep Q-Network (DQN)
 
+In addition to the tabular Q-learning baseline, we implemented a Deep Q-Network (DQN) using Stable-Baselines3.
+
+Unlike tabular Q-learning, which relies on a handcrafted feature-based state representation, DQN operates directly on the full 15×15 grid observation. The grid is flattened and normalized before being passed into a multi-layer perceptron (MLP) policy network.
+
+Key implementation details:
+
+- Implemented using Stable-Baselines3 DQN
+- Replay buffer size: 50,000
+- Learning rate: 1e-4
+- Discount factor (γ): 0.99
+- Exploration schedule: decayed from 1.0 to 0.05
+- Trained for 300,000 timesteps
+- Added terminal death penalty to accelerate learning of collision avoidance
+- Evaluation performed across multiple randomized seeds to test generalization
+
+The DQN model is saved as `dqn_model.zip` and evaluated on unseen environment configurations.
+
 
 
 ## Evaluation
@@ -91,6 +108,13 @@ Tabular Q-Learning:
 - Average 50 reward points per run
 - 3.26 reward points per 10 steps
 
+Deep Q-Network (DQN):
+- Mean survival steps: ~6 steps (across randomized seeds)
+- Max survival steps: ~13 steps
+- Mean reward: ~0.47
+
+While the DQN model demonstrates learning behavior during training, it currently does not generalize as well as the tabular Q-learning baseline. This is likely due to the higher dimensional raw grid input and limited training timesteps relative to the complexity of the environment.
+
 
 
 ---
@@ -99,8 +123,20 @@ Tabular Q-Learning:
 
 ### Goals
 
+Deep Q-Network (DQN)
+- Improve generalization across randomized layouts
+- Increase training duration to ≥1M timesteps
+- Experiment with stronger reward shaping
+- Explore CNN-based DQN to better capture spatial grid structure
+
 
 ### Challenges
+
+Deep Q-Network (DQN)
+- High-dimensional raw grid input makes function approximation difficult
+- Requires significantly more training data than tabular Q-learning
+- Risk of overfitting to specific layout patterns
+- Training instability due to sparse reward signals
 
 
 ---
