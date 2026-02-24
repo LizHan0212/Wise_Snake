@@ -91,7 +91,7 @@ Key implementation details:
 - Added terminal death penalty to accelerate learning of collision avoidance
 - Evaluation performed across multiple randomized seeds to test generalization
 
-The DQN model is saved as `dqn_model.zip` and evaluated on unseen environment configurations.
+The DQN model is saved as `dqn_model.zip` and evaluated across multiple randomized seeds to assess generalization performance.
 
 
 
