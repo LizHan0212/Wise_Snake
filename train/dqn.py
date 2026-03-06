@@ -13,6 +13,7 @@ if PROJECT_ROOT not in sys.path:
 
 from environment.snake_env import SnakeEnv, EnvConfig
 from utils.seed import seed_everything
+from train.tab_q import encode_state
 
 LOG_EVERY = 100
 MAX_STEPS_PER_EPISODE = 500
@@ -135,6 +136,47 @@ class FlatFloatObsWrapper(gym.ObservationWrapper):
         return obs.reshape(-1)
 
 
+class FeatureObsWrapper(gym.ObservationWrapper):
+    """
+    Encodes the (N,N) grid into the same 11-bit feature representation used by tab_q.
+    This drastically reduces the state dimensionality and makes the problem easier
+    for DQN to learn.
+    """
+
+    def __init__(self, env: gym.Env):
+        super().__init__(env)
+        old_space = env.observation_space
+        assert isinstance(old_space, spaces.Box)
+        # 11 binary features as float32 in [0,1]
+        self.observation_space = spaces.Box(
+            low=0.0, high=1.0, shape=(11,), dtype=np.float32
+        )
+
+    def observation(self, obs):
+        s = int(encode_state(obs))
+        bits = [(s >> i) & 1 for i in range(10, -1, -1)]
+        return np.array(bits, dtype=np.float32)
+
+
+class RewardShapingWrapper(gym.RewardWrapper):
+    """
+    Simplifies rewards for DQN so that:
+    - Fruit is clearly positive and large.
+    - Death is clearly negative.
+    - Step/turn penalties are small, to encourage surviving long enough to reach fruit.
+    """
+
+    def reward(self, r: float) -> float:
+        # Fruit events: original rewards are typically 1, 3, or 5 (plus small penalties).
+        if r > 0.5:
+            return 1.0
+        # Death events: large negative spike (about -3).
+        if r < -1.5:
+            return -1.0
+        # Small per-step/turn penalties: keep but make them very small.
+        return -0.01
+
+
 class RenderAfterStepWrapper(gym.Wrapper):
     """Calls env.render() after every step and reset so the pygame window updates during SB3 training."""
 
@@ -166,7 +208,10 @@ def make_env(seed: int, render_mode: str | None = None):
         window_title=os.environ.get("WISE_SNAKE_ALGO_NAME", "Wise Snake"),
     )
     env = SnakeEnv(env_cfg, render_mode=render_mode)
-    env = FlatFloatObsWrapper(env)
+    # Use the same compact feature encoding as tab_q for better learning.
+    env = FeatureObsWrapper(env)
+    # Simplify reward structure for DQN.
+    env = RewardShapingWrapper(env)
     env = Monitor(env)  # removes warning + ensures correct episode stats
     if render_mode == "human":
         env = RenderAfterStepWrapper(env)
@@ -231,7 +276,7 @@ def main(render_mode: str | None = None, episodes: int = 3000):
         policy="MlpPolicy",
         env=env,
         learning_rate=1e-4,
-        buffer_size=50000,
+        buffer_size=100_000,
         learning_starts=5000,
         batch_size=64,
         gamma=0.99,
@@ -240,6 +285,7 @@ def main(render_mode: str | None = None, episodes: int = 3000):
         exploration_fraction=0.2,
         exploration_final_eps=0.05,
         verbose=0,
+        policy_kwargs=dict(net_arch=[256, 256]),
         # tensorboard_log=os.path.join(project_root, "runs_dqn"),
         seed=seed,
     )

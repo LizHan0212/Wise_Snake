@@ -14,6 +14,8 @@ Run with visible pygame window via watch.py:
 import os
 import sys
 import random
+from collections import deque
+
 import numpy as np
 import gymnasium as gym
 
@@ -54,15 +56,139 @@ def make_env(seed: int, render_mode: str | None = None):
 
 
 def _rollout_return(env: SnakeEnv, state, action: int, max_steps: int, gamma: float = 0.99) -> float:
-    """Run one rollout: set state, take action, then random actions until done. Return discounted sum of rewards."""
+    """Run one rollout: set state, take action, then heuristic-guided actions until done.
+
+    The heuristic prefers moves that keep the snake alive and move its head closer
+    to the nearest fruit, which makes rollouts much more informative than pure random
+    trajectories in this sparse, mostly-negative reward environment.
+    """
     env.set_state(state)
     obs, r, term, trunc, _ = env.step(action)
     total = float(r)
     discount = gamma
     steps = 1
+
+    # Precompute action->(dr,dc) mapping (same as env).
+    action_dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+    def _find_head(obs_arr: np.ndarray) -> tuple[int, int] | None:
+        pos = np.argwhere(obs_arr == 1)
+        if pos.size == 0:
+            return None
+        r_h, c_h = pos[0]
+        return int(r_h), int(c_h)
+
+    def _nearest_fruit(obs_arr: np.ndarray) -> tuple[int, int] | None:
+        fruits = np.argwhere(obs_arr == 3)
+        if fruits.size == 0:
+            return None
+        # Return fruit with minimum Manhattan distance to head.
+        head = _find_head(obs_arr)
+        if head is None:
+            return None
+        hr, hc = head
+        best = None
+        best_d = 10**9
+        for fr, fc in fruits:
+            fr_i, fc_i = int(fr), int(fc)
+            d = abs(fr_i - hr) + abs(fc_i - hc)
+            if d < best_d:
+                best_d = d
+                best = (fr_i, fc_i)
+        return best
+
+    def _heuristic_action(obs_arr: np.ndarray) -> int:
+        """
+        Choose an action that keeps the snake alive, preserves future space,
+        and moves its head toward fruit when possible.
+
+        Heuristic terms (per candidate move):
+        - Reject moves that immediately hit walls, body, or barriers.
+        - Strong bonus for eating fruit immediately.
+        - Bonus for reducing Manhattan distance to nearest fruit.
+        - Bonus for having a large reachable free area from the new head position.
+        - Mild preference for staying away from walls/corners.
+        """
+        head = _find_head(obs_arr)
+        if head is None:
+            return random.randint(0, 3)
+        hr, hc = head
+        target = _nearest_fruit(obs_arr)
+        n = obs_arr.shape[0]
+
+        def _reachable_area(start_r: int, start_c: int) -> int:
+            """Approximate how much free space is available from (start_r,start_c)."""
+            visited = set()
+            q = deque()
+            visited.add((start_r, start_c))
+            q.append((start_r, start_c))
+            count = 0
+            while q:
+                r0, c0 = q.popleft()
+                count += 1
+                for dr0, dc0 in action_dirs:
+                    rr, cc = r0 + dr0, c0 + dc0
+                    if not (0 <= rr < n and 0 <= cc < n):
+                        continue
+                    if (rr, cc) in visited:
+                        continue
+                    cell = int(obs_arr[rr, cc])
+                    # Treat empty or fruit cells as traversable.
+                    if cell in (0, 3):
+                        visited.add((rr, cc))
+                        q.append((rr, cc))
+            return count
+
+        best_a = None
+        best_score = -1e9
+        for a, (dr, dc) in enumerate(action_dirs):
+            nr, nc = hr + dr, hc + dc
+            # Check bounds.
+            if not (0 <= nr < n and 0 <= nc < n):
+                continue
+            cell = int(obs_arr[nr, nc])
+            # Reject moves that would hit body or barrier.
+            if cell == 2 or cell == 4:
+                continue
+
+            score = 0.0
+
+            # Strong bonus for eating fruit immediately.
+            if cell == 3:
+                score += 10.0
+
+            # Bonus for moving closer to nearest fruit.
+            if target is not None:
+                fr, fc = target
+                old_d = abs(fr - hr) + abs(fc - hc)
+                new_d = abs(fr - nr) + abs(fc - nc)
+                score += 1.0 * (old_d - new_d)  # positive if we get closer
+
+            # Bonus for large reachable free area from new head position.
+            area = _reachable_area(nr, nc)
+            score += 0.05 * area
+
+            # Slight preference for staying away from walls/corners.
+            wall_dist = min(nr, nc, n - 1 - nr, n - 1 - nc)
+            score += 0.2 * wall_dist
+
+            # Small per-move penalty to prefer shorter routes.
+            score -= 1.0
+
+            # Slight random tie-breaker.
+            score += random.uniform(-0.01, 0.01)
+
+            if score > best_score:
+                best_score = score
+                best_a = a
+
+        if best_a is not None:
+            return best_a
+        # If everything looked bad, just sample a random action.
+        return random.randint(0, 3)
+
     while (not term) and (not trunc) and steps < max_steps:
-        # random valid action (avoid reverse if we want; env already blocks reverse)
-        a = random.randint(0, 3)
+        a = _heuristic_action(obs)
         obs, r, term, trunc, _ = env.step(a)
         total += discount * float(r)
         discount *= gamma
@@ -85,8 +211,8 @@ def train(
     seed: int = 0,
     episodes: int = 500,
     max_steps: int = 500,
-    n_rollouts: int = 25,
-    max_rollout_steps: int = 80,
+    n_rollouts: int = 40,
+    max_rollout_steps: int = 120,
     gamma: float = 0.99,
     render_mode: str | None = None,
     log_every: int = 100,
@@ -200,8 +326,8 @@ def main(render_mode: str | None = None, episodes: int = 3000):
         seed=0,
         episodes=episodes,
         max_steps=500,
-        n_rollouts=25,
-        max_rollout_steps=80,
+        n_rollouts=40,
+        max_rollout_steps=120,
         gamma=0.99,
         render_mode=render_mode,
         log_every=100,

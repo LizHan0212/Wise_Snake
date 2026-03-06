@@ -23,6 +23,7 @@ if PROJECT_ROOT not in sys.path:
 
 from environment.snake_env import SnakeEnv, EnvConfig
 from utils.seed import seed_everything
+from train.tab_q import encode_state
 
 LOG_EVERY = 100
 MAX_STEPS_PER_EPISODE = 500
@@ -145,6 +146,29 @@ class FlatFloatObsWrapper(gym.ObservationWrapper):
         return obs.reshape(-1)
 
 
+class FeatureObsWrapper(gym.ObservationWrapper):
+    """
+    Encodes the (N,N) grid into the same 11-bit feature representation used by tab_q.
+    This drastically reduces the state dimensionality and makes the problem easier
+    for PPO to learn.
+    """
+
+    def __init__(self, env: gym.Env):
+        super().__init__(env)
+        old_space = env.observation_space
+        assert isinstance(old_space, spaces.Box)
+        # 11 binary features as float32 in [0,1]
+        self.observation_space = spaces.Box(
+            low=0.0, high=1.0, shape=(11,), dtype=np.float32
+        )
+
+    def observation(self, obs):
+        # encode_state returns an int in [0, 2^11 - 1]; convert to 11 binary features
+        s = int(encode_state(obs))
+        bits = [(s >> i) & 1 for i in range(10, -1, -1)]
+        return np.array(bits, dtype=np.float32)
+
+
 class RenderAfterStepWrapper(gym.Wrapper):
     """Calls env.render() after every step and reset so the pygame window updates during training."""
 
@@ -177,7 +201,8 @@ def make_env(seed: int, render_mode: str | None = None):
         window_title=os.environ.get("WISE_SNAKE_ALGO_NAME", "Wise Snake"),
     )
     env = SnakeEnv(env_cfg, render_mode=render_mode)
-    env = FlatFloatObsWrapper(env)
+    # Use the same compact feature encoding as tab_q for better learning.
+    env = FeatureObsWrapper(env)
     env = Monitor(env)
     if render_mode == "human":
         env = RenderAfterStepWrapper(env)
@@ -236,14 +261,15 @@ def main(render_mode: str | None = None, episodes: int = 3000):
         policy="MlpPolicy",
         env=env,
         learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=64,
+        n_steps=1024,
+        batch_size=128,
         n_epochs=10,
         gamma=0.99,
         gae_lambda=0.95,
         clip_range=0.2,
-        ent_coef=0.01,
+        ent_coef=0.001,
         verbose=0,
+        policy_kwargs=dict(net_arch=[256, 256]),
         # tensorboard_log=os.path.join(project_root, "runs_ppo"),
         seed=seed,
     )
