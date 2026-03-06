@@ -1,0 +1,321 @@
+import os
+import sys
+import random
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
+import numpy as np
+
+# Ensure imports work both when run as a script and via watch.py.
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from environment.snake_env import SnakeEnv, EnvConfig
+from utils.seed import seed_everything
+
+
+# Always resolve paths relative to project root (so PyCharm working dir doesn't matter)
+SAVE_PATH_DEFAULT = os.path.join(PROJECT_ROOT, "trained_parameter", "q_table.npy")
+
+
+@dataclass
+class QTrainConfig:
+    seed: int = 0
+
+    episodes: int = 3000
+    max_steps_per_episode: int = 500  # should match EnvConfig.max_steps
+
+    alpha: float = 0.1       # learning rate
+    gamma: float = 0.95      # discount factor
+
+    eps_start: float = 1.0
+    eps_end: float = 0.05
+    eps_decay: float = 0.999  # per-episode decay
+
+    save_path: str = SAVE_PATH_DEFAULT
+    log_every: int = 100
+
+    # If set (e.g. "human"), env will render so you can watch training.
+    render_mode: Optional[str] = None
+
+
+# ---------- State Encoding  ----------
+# 3 danger bits (straight/left/right)
+# 4 direction one-hot (up/down/left/right)
+# 4 food direction one-hot (up/down/left/right) toward closest fruit
+def _find_head(obs: np.ndarray) -> Tuple[int, int]:
+    pos = np.argwhere(obs == 1)
+    if pos.size == 0:
+        raise RuntimeError("No head found in observation.")
+    r, c = pos[0]
+    return int(r), int(c)
+
+
+def _infer_direction_from_obs(obs: np.ndarray) -> Tuple[int, int]:
+    hr, hc = _find_head(obs)
+    n = obs.shape[0]
+    neighbors = [(hr - 1, hc), (hr + 1, hc), (hr, hc - 1), (hr, hc + 1)]
+    for nr, nc in neighbors:
+        if 0 <= nr < n and 0 <= nc < n and obs[nr, nc] == 2:
+            dr = hr - nr
+            dc = hc - nc
+            return dr, dc
+    return 0, 1  # fallback RIGHT
+
+
+def _turn_left(dr: int, dc: int) -> Tuple[int, int]:
+    return -dc, dr
+
+
+def _turn_right(dr: int, dc: int) -> Tuple[int, int]:
+    return dc, -dr
+
+
+def _is_danger(obs: np.ndarray, r: int, c: int) -> int:
+    n = obs.shape[0]
+    if not (0 <= r < n and 0 <= c < n):
+        return 1  # wall
+    v = int(obs[r, c])
+    # danger: body (2) or barrier (4)
+    return 1 if (v == 2 or v == 4) else 0
+
+
+def _closest_fruit_direction(obs: np.ndarray) -> Tuple[int, int, int, int]:
+    hr, hc = _find_head(obs)
+    fruits = np.argwhere(obs == 3)
+    if fruits.size == 0:
+        return 0, 0, 0, 0
+
+    best = None
+    best_d = 10**9
+    for fr, fc in fruits:
+        fr, fc = int(fr), int(fc)
+        d = abs(fr - hr) + abs(fc - hc)
+        if d < best_d:
+            best_d = d
+            best = (fr, fc)
+
+    fr, fc = best
+    up = 1 if fr < hr else 0
+    down = 1 if fr > hr else 0
+    left = 1 if fc < hc else 0
+    right = 1 if fc > hc else 0
+    return up, down, left, right
+
+
+def encode_state(obs: np.ndarray) -> int:
+    hr, hc = _find_head(obs)
+    dr, dc = _infer_direction_from_obs(obs)
+
+    ds = _is_danger(obs, hr + dr, hc + dc)
+    ldr, ldc = _turn_left(dr, dc)
+    dl = _is_danger(obs, hr + ldr, hc + ldc)
+    rdr, rdc = _turn_right(dr, dc)
+    drg = _is_danger(obs, hr + rdr, hc + rdc)
+
+    dir_up = 1 if (dr, dc) == (-1, 0) else 0
+    dir_down = 1 if (dr, dc) == (1, 0) else 0
+    dir_left = 1 if (dr, dc) == (0, -1) else 0
+    dir_right = 1 if (dr, dc) == (0, 1) else 0
+
+    food_up, food_down, food_left, food_right = _closest_fruit_direction(obs)
+
+    bits = [
+        ds, dl, drg,
+        dir_up, dir_down, dir_left, dir_right,
+        food_up, food_down, food_left, food_right
+    ]
+
+    state = 0
+    for b in bits:
+        state = (state << 1) | int(b)
+    return state
+
+
+def _epsilon_greedy(Q: np.ndarray, s: int, eps: float, obs: np.ndarray) -> int:
+    valid_actions = _generate_valid_actions(obs)
+
+    if random.random() < eps:
+        return random.choice(valid_actions)
+
+    best_a = valid_actions[0]
+    best_q = float(Q[s, best_a])
+    for a in valid_actions[1:]:
+        q = float(Q[s, a])
+        if q > best_q:
+            best_q = q
+            best_a = a
+    return int(best_a)
+
+
+def train(cfg: QTrainConfig) -> np.ndarray:
+    seed_everything(cfg.seed)
+
+    os.makedirs(os.path.dirname(cfg.save_path), exist_ok=True)
+
+    env_cfg = EnvConfig(
+        grid_size=15,
+        max_steps=cfg.max_steps_per_episode,
+        seed=cfg.seed,
+        render_fps=120 if cfg.render_mode == "human" else 12,
+        window_title=os.environ.get("WISE_SNAKE_ALGO_NAME", "Wise Snake"),
+    )
+    env = SnakeEnv(env_cfg, render_mode=cfg.render_mode)
+
+    num_states = 2048
+    num_actions = 4
+    Q = np.zeros((num_states, num_actions), dtype=np.float32)
+
+    eps = cfg.eps_start
+    recent_returns = []
+    recent_lengths = []
+    recent_snake_lengths = []
+    recent_fruits = []
+    last_avg_ret = None
+    last_avg_len = None
+    last_avg_snake_len = None
+    last_avg_fruits = None
+
+    for ep in range(1, cfg.episodes + 1):
+        # vary episode seed but remain reproducible
+        obs, _ = env.reset(seed=cfg.seed + ep)
+        if cfg.render_mode == "human":
+            still_open = env.render()
+            if not still_open:
+                env.close()
+                np.save(cfg.save_path, Q)
+                print(f"Training stopped. Saved Q-table to: {cfg.save_path}")
+                return Q
+        s = encode_state(obs)
+
+        ep_return = 0.0
+        ep_steps = 0
+        terminated = False
+        truncated = False
+
+        while (not terminated) and (not truncated) and ep_steps < cfg.max_steps_per_episode:
+            a = _epsilon_greedy(Q, s, eps, obs)
+
+            obs2, r, terminated, truncated, _ = env.step(a)
+            if cfg.render_mode == "human":
+                still_open = env.render()
+                if not still_open:
+                    env.close()
+                    np.save(cfg.save_path, Q)
+                    print(f"Training stopped. Saved Q-table to: {cfg.save_path}")
+                    return Q
+            s2 = encode_state(obs2)
+            obs = obs2
+
+            best_next = float(np.max(Q[s2]))
+            td_target = float(r) + cfg.gamma * best_next * (0.0 if terminated else 1.0)
+            Q[s, a] = Q[s, a] + cfg.alpha * (td_target - Q[s, a])
+
+            s = s2
+            ep_return += float(r)
+            ep_steps += 1
+
+        eps = max(cfg.eps_end, eps * cfg.eps_decay)
+
+        recent_returns.append(ep_return)
+        recent_lengths.append(ep_steps)
+        final_length = len(env._snake)
+        fruits_eaten = final_length - 3  # removing 3 since init len == 3
+
+        recent_snake_lengths.append(final_length)
+        recent_fruits.append(fruits_eaten)
+
+        if len(recent_returns) > cfg.log_every:
+            recent_returns.pop(0)
+            recent_lengths.pop(0)
+            recent_snake_lengths.pop(0)
+            recent_fruits.pop(0)
+
+        if ep % cfg.log_every == 0:
+            avg_ret = sum(recent_returns) / len(recent_returns)
+            avg_len = sum(recent_lengths) / len(recent_lengths)
+            avg_snake_len = sum(recent_snake_lengths) / len(recent_snake_lengths)
+            avg_fruits = sum(recent_fruits) / len(recent_fruits)
+            last_avg_ret = avg_ret
+            last_avg_len = avg_len
+            last_avg_snake_len = avg_snake_len
+            last_avg_fruits = avg_fruits
+
+            algo_label = os.environ.get("WISE_SNAKE_ALGO_NAME")
+            prefix = f"[{algo_label}] " if algo_label else ""
+            print(
+                f"{prefix}Episode {ep:5d} | eps={eps:.3f} | "
+                f"avg_return={avg_ret:.2f} | avg_steps={avg_len:.1f} | "
+                f"avg_len={avg_snake_len:.1f} | avg_fruit={avg_fruits:.1f}"
+            )
+    # If launched via train_all, write final stats for comparison.
+    if os.environ.get("WISE_SNAKE_FROM_TRAIN_ALL") == "1":
+        if last_avg_ret is None and recent_returns:
+            last_avg_ret = sum(recent_returns) / len(recent_returns)
+            last_avg_len = sum(recent_lengths) / len(recent_lengths)
+            last_avg_snake_len = sum(recent_snake_lengths) / len(recent_snake_lengths)
+            last_avg_fruits = sum(recent_fruits) / len(recent_fruits)
+        if last_avg_ret is not None:
+            stats_path = os.path.join(PROJECT_ROOT, "trained_parameter", "tab_q_final_stats.txt")
+            try:
+                with open(stats_path, "w", encoding="utf-8") as f:
+                    f.write(
+                        f"avg_return={last_avg_ret:.4f} | "
+                        f"avg_steps={last_avg_len:.4f} | "
+                        f"avg_len={last_avg_snake_len:.4f} | "
+                        f"avg_fruit={last_avg_fruits:.4f}\n"
+                    )
+            except OSError:
+                pass
+
+    env.close()
+
+    np.save(cfg.save_path, Q)
+    print(f"Saved Q-table to: {cfg.save_path}")
+    return Q
+
+
+def _generate_valid_actions(obs: np.ndarray) -> list[int]:
+    """
+    Helper function called by _epsilon_greedy(). Returns set of valid actions,
+    masking out backwards moves so agent doesn't waste resources exploring backwards moves.
+
+    Created because environment prevented backwards moves, but agent was 
+    still able to explore backwards move actions.
+    """
+    dr, dc = _infer_direction_from_obs(obs)
+
+    # map action to direction (same as env)
+    action_dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+    # illegal action is the one that is exact opposite of current dir
+    illegal = None
+    for a, (adr, adc) in enumerate(action_dirs):
+        if adr == -dr and adc == -dc:
+            illegal = a
+            break
+
+    if illegal is None:
+        return [0, 1, 2, 3]
+    return [a for a in range(4) if a != illegal]
+
+
+def run_training(render: bool = False, total: int = 3000) -> np.ndarray:
+    """Run tabular Q-learning training. total=episodes. If render=True, display the game window while learning."""
+    cfg = QTrainConfig(render_mode="human" if render else None, episodes=total)
+    return train(cfg)
+
+
+def main():
+    try:
+        total = int(sys.argv[1]) if len(sys.argv) > 1 else 3000
+    except (ValueError, IndexError):
+        total = 3000
+    cfg = QTrainConfig(episodes=total)
+    train(cfg)
+
+
+if __name__ == "__main__":
+    main()
+

@@ -26,6 +26,7 @@ class EnvConfig:
     margin_px: int = 2
     hud_px: int = 40
     window_scale: float = 1.5
+    window_title: str = "Wise Snake"
 
 
 class SnakeEnv(gym.Env):
@@ -108,6 +109,21 @@ class SnakeEnv(gym.Env):
 
     def get_session_seed(self) -> int:
         return self._session_seed
+
+    def get_state(self):
+        """Return a copy of game state for MCTS/simulation. Use with set_state()."""
+        return (
+            list(self._snake),
+            tuple(self._dir),
+            dict(self._fruit),
+            set(self._barriers),
+            self._steps,
+            self._terminated,
+        )
+
+    def set_state(self, state) -> None:
+        """Restore game state from get_state(). Used for MCTS rollouts."""
+        self._snake, self._dir, self._fruit, self._barriers, self._steps, self._terminated = state
 
     # ---------------- Gym API ----------------
     def reset(self, *, seed: Optional[int] = None, options=None):
@@ -307,7 +323,7 @@ class SnakeEnv(gym.Env):
         h = self._hud + w
 
         self._screen = pygame.display.set_mode((w, h))
-        pygame.display.set_caption("Wise Snake")
+        pygame.display.set_caption(self.cfg.window_title)
         self._clock = pygame.time.Clock()
         self._font = pygame.font.SysFont(None, int(24 * s))
 

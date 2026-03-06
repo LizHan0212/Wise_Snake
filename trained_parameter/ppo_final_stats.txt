@@ -1,0 +1,1 @@
+avg_return=-2.4215 | avg_steps=17.2700 | avg_len=3.5400 | avg_fruit=0.5400
