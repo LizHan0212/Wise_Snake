@@ -177,6 +177,30 @@ class RewardShapingWrapper(gym.RewardWrapper):
         return -0.01
 
 
+class RandomSeedResetWrapper(gym.Wrapper):
+    """
+    Ensures that each training episode sees a different grid layout by varying
+    the reset seed per episode, similar to how tab_q and mcts are configured.
+
+    - If env.reset(seed=...) is called explicitly (e.g. during evaluation),
+      this wrapper will respect that seed.
+    - Otherwise, it will increment an internal episode counter and use
+      base_seed + episode_idx for the reset seed.
+    """
+
+    def __init__(self, env: gym.Env, base_seed: int):
+        super().__init__(env)
+        self.base_seed = int(base_seed)
+        self.episode_idx = 0
+
+    def reset(self, **kwargs):
+        seed = kwargs.pop("seed", None)
+        if seed is None:
+            self.episode_idx += 1
+            seed = self.base_seed + self.episode_idx
+        return self.env.reset(seed=seed, **kwargs)
+
+
 class RenderAfterStepWrapper(gym.Wrapper):
     """Calls env.render() after every step and reset so the pygame window updates during SB3 training."""
 
@@ -208,6 +232,9 @@ def make_env(seed: int, render_mode: str | None = None):
         window_title=os.environ.get("WISE_SNAKE_ALGO_NAME", "Wise Snake"),
     )
     env = SnakeEnv(env_cfg, render_mode=render_mode)
+    # During training we want different grids per episode. RandomSeedResetWrapper
+    # handles per-episode seeding while still allowing explicit seeds during eval.
+    env = RandomSeedResetWrapper(env, base_seed=seed)
     # Use the same compact feature encoding as tab_q for better learning.
     env = FeatureObsWrapper(env)
     # Simplify reward structure for DQN.
@@ -286,7 +313,7 @@ def main(render_mode: str | None = None, episodes: int = 3000):
         exploration_final_eps=0.05,
         verbose=0,
         policy_kwargs=dict(net_arch=[256, 256]),
-        # tensorboard_log=os.path.join(project_root, "runs_dqn"),
+        tensorboard_log=os.path.join(project_root, "runs_dqn"),
         seed=seed,
     )
 
