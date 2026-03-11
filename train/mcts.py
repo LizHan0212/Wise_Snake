@@ -26,6 +26,11 @@ if PROJECT_ROOT not in sys.path:
 from environment.snake_env import SnakeEnv, EnvConfig
 from utils.seed import seed_everything
 
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None  # type: ignore[misc, assignment]
+
 
 class RenderAfterStepWrapper(gym.Wrapper):
     """Calls env.render() after every step and reset so the pygame window updates."""
@@ -237,6 +242,9 @@ def train(
     last_avg_snake_len = None
     last_avg_fruit = None
 
+    log_dir = os.path.join(PROJECT_ROOT, "runs_mcts")
+    writer = SummaryWriter(log_dir=log_dir) if SummaryWriter else None
+
     for ep in range(1, episodes + 1):
         obs, _ = play_env.reset(seed=seed + ep)
         if render_mode == "human":
@@ -288,6 +296,14 @@ def train(
             last_avg_len = avg_len
             last_avg_snake_len = avg_snake_len
             last_avg_fruit = avg_fruit
+            if writer is not None:
+                # SB3-style tags (so TensorBoard looks familiar across algorithms)
+                writer.add_scalar("rollout/ep_rew_mean", avg_ret, ep)
+                writer.add_scalar("rollout/ep_len_mean", avg_len, ep)
+                writer.add_scalar("train/avg_return", avg_ret, ep)
+                writer.add_scalar("train/avg_steps", avg_len, ep)
+                writer.add_scalar("train/avg_len", avg_snake_len, ep)
+                writer.add_scalar("train/avg_fruit", avg_fruit, ep)
             algo_label = os.environ.get("WISE_SNAKE_ALGO_NAME")
             prefix = f"[{algo_label}] " if algo_label else ""
             print(
@@ -296,6 +312,8 @@ def train(
                 f"avg_len={avg_snake_len:.1f} | avg_fruit={avg_fruit:.1f}"
             )
 
+    if writer is not None:
+        writer.close()
     # If launched via train_all, write final stats for comparison.
     if os.environ.get("WISE_SNAKE_FROM_TRAIN_ALL") == "1":
         if last_avg_ret is None and recent_returns:

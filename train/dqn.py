@@ -138,24 +138,148 @@ class FlatFloatObsWrapper(gym.ObservationWrapper):
 
 class FeatureObsWrapper(gym.ObservationWrapper):
     """
-    Encodes the (N,N) grid into the same 11-bit feature representation used by tab_q.
-    This drastically reduces the state dimensionality and makes the problem easier
-    for DQN to learn.
+    Encodes the (N,N) grid into a compact feature vector inspired by tab_q, with
+    additional geometry-aware features:
+    - 11 bits from the tab_q encoder (danger bits, direction, food direction)
+    - 4 normalized distances to nearest obstacle (body/barrier/wall) in each
+      cardinal direction (up, down, left, right)
+    - 4 normalized "flood fill" open-cell counts reachable if we step into each
+      adjacent valid cell (up/down/left/right)
+    - 1 normalized distance to the nearest fruit
+
+    Total feature dimension: 11 + 4 + 4 + 1 = 20.
     """
 
     def __init__(self, env: gym.Env):
         super().__init__(env)
         old_space = env.observation_space
         assert isinstance(old_space, spaces.Box)
-        # 11 binary features as float32 in [0,1]
+        # 20 float32 features in [0,1]-ish range
         self.observation_space = spaces.Box(
-            low=0.0, high=1.0, shape=(11,), dtype=np.float32
+            low=0.0, high=1.0, shape=(20,), dtype=np.float32
         )
 
+    def _find_head(self, obs_arr: np.ndarray) -> tuple[int, int] | None:
+        pos = np.argwhere(obs_arr == 1)
+        if pos.size == 0:
+            return None
+        r_h, c_h = pos[0]
+        return int(r_h), int(c_h)
+
+    def _nearest_fruit(self, obs_arr: np.ndarray, head: tuple[int, int] | None) -> tuple[int, int] | None:
+        fruits = np.argwhere(obs_arr == 3)
+        if fruits.size == 0 or head is None:
+            return None
+        hr, hc = head
+        best = None
+        best_d = 10**9
+        for fr, fc in fruits:
+            fr_i, fc_i = int(fr), int(fc)
+            d = abs(fr_i - hr) + abs(fc_i - hc)
+            if d < best_d:
+                best_d = d
+                best = (fr_i, fc_i)
+        return best
+
+    def _dist_to_obstacle(self, obs_arr: np.ndarray, head: tuple[int, int]) -> list[float]:
+        """
+        For each cardinal direction, compute how many cells until we hit either
+        the wall or an obstacle (body/barrier). Distances are normalized by grid size.
+        """
+        hr, hc = head
+        n = obs_arr.shape[0]
+        action_dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        dists: list[float] = []
+        for dr, dc in action_dirs:
+            steps = 0
+            r, c = hr + dr, hc + dc
+            while 0 <= r < n and 0 <= c < n:
+                cell = int(obs_arr[r, c])
+                if cell == 2 or cell == 4:
+                    break
+                steps += 1
+                r += dr
+                c += dc
+            # Normalize by grid size (max possible meaningful distance).
+            dists.append(steps / float(n))
+        return dists
+
+    def _flood_fill_from(self, obs_arr: np.ndarray, start: tuple[int, int]) -> float:
+        """
+        Approximate how many open cells are reachable from 'start' (empty or fruit).
+        Returns a normalized count in [0,1].
+        """
+        n = obs_arr.shape[0]
+        r0, c0 = start
+        if not (0 <= r0 < n and 0 <= c0 < n):
+            return 0.0
+        cell0 = int(obs_arr[r0, c0])
+        # Cannot start flood fill from an immediate obstacle.
+        if cell0 == 2 or cell0 == 4:
+            return 0.0
+
+        visited = set()
+        q: list[tuple[int, int]] = []
+        visited.add((r0, c0))
+        q.append((r0, c0))
+        count = 0
+        action_dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+        while q:
+            r, c = q.pop()
+            count += 1
+            for dr, dc in action_dirs:
+                rr, cc = r + dr, c + dc
+                if not (0 <= rr < n and 0 <= cc < n):
+                    continue
+                if (rr, cc) in visited:
+                    continue
+                cell = int(obs_arr[rr, cc])
+                # Treat empty or fruit cells as traversable.
+                if cell in (0, 3):
+                    visited.add((rr, cc))
+                    q.append((rr, cc))
+        # Normalize by total number of cells.
+        return count / float(n * n)
+
     def observation(self, obs):
+        # First 11 bits from tab_q encoder.
         s = int(encode_state(obs))
         bits = [(s >> i) & 1 for i in range(10, -1, -1)]
-        return np.array(bits, dtype=np.float32)
+
+        head = self._find_head(obs)
+        n = obs.shape[0]
+
+        # Distances to nearest obstacle in each cardinal direction.
+        if head is not None:
+            obstacle_feats = self._dist_to_obstacle(obs, head)
+        else:
+            obstacle_feats = [0.0, 0.0, 0.0, 0.0]
+
+        # Flood fill open cells from hypothetical moves into each adjacent cell.
+        flood_feats: list[float] = []
+        action_dirs = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        if head is not None:
+            hr, hc = head
+            for dr, dc in action_dirs:
+                nr, nc = hr + dr, hc + dc
+                flood_feats.append(self._flood_fill_from(obs, (nr, nc)))
+        else:
+            flood_feats = [0.0, 0.0, 0.0, 0.0]
+
+        # Distance to nearest fruit, normalized.
+        nearest = self._nearest_fruit(obs, head)
+        if head is not None and nearest is not None:
+            hr, hc = head
+            fr, fc = nearest
+            dist = abs(fr - hr) + abs(fc - hc)
+            # Max Manhattan distance on the grid is ~2*(n-1).
+            fruit_dist = dist / float(2 * (n - 1) if n > 1 else 1)
+        else:
+            fruit_dist = 0.0
+
+        features = bits + obstacle_feats + flood_feats + [fruit_dist]
+        return np.array(features, dtype=np.float32)
 
 
 class RewardShapingWrapper(gym.RewardWrapper):
