@@ -5,9 +5,9 @@ title: Final Report
 
 # Project Summary
 
-Snake is a game that requires planning, long-term reward optimization, and spatial reasoning. Although simple for humans, it is difficult for algorithms because the agent must balance immediate rewards with long-term survival while avoiding collisions and traps.
+Snake is a game that requires planning, long-term reward optimization, and spatial reasoning. Although simple for humans, it is challenging for algorithms because the agent must balance immediate rewards with long-term survival while avoiding collisions and traps.
 
-Traditional approaches such as tabular methods and search-based algorithms struggle due to the large state space and dynamic environment. Reinforcement learning provides a suitable framework, as it allows the agent to learn directly through interaction with the environment.
+Traditional approaches such as tabular methods and search-based algorithms struggle due to the large state space and dynamic environment. Reinforcement learning provides a suitable framework, as it allows the agent to learn directly through interaction with the environment instead of relying on hand-crafted rules.
 
 In this project, we trained an AI agent to play an enhanced Snake environment that includes obstacles and multiple fruit types. We explored several reinforcement learning methods—Tabular Q-learning, Deep Q-Network (DQN), and Proximal Policy Optimization (PPO)—to compare their performance in terms of learning efficiency, generalization, and long-term planning.
 
@@ -25,7 +25,7 @@ In this project, we trained an AI agent to play an enhanced Snake environment th
 
 - Large state space (15×15 grid)  
 - Sparse rewards make learning difficult  
-- Neural network models require significant computation
+- Neural network models require significant computation  
 
 ---
 
@@ -80,7 +80,7 @@ We improved the representation by adding:
 - Flood-fill reachable space  
 - Manhattan distance to food  
 
-This provides richer spatial information to the agent and improves learning efficiency
+This richer feature-based representation reduces the effective state space and provides the agent with more meaningful spatial information, improving learning efficiency.
 
 ---
 
@@ -93,7 +93,7 @@ Final reward design:
 - Turning penalty  
 - Idle step penalty  
 
-We removed survival-only rewards to prevent the agent from learning degenerate behaviors such as circling without progress 
+We removed survival-only rewards to prevent the agent from learning degenerate behaviors such as circling without progress, and to better align rewards with the actual objective of collecting food.
 
 ---
 
@@ -107,7 +107,7 @@ We removed survival-only rewards to prevent the agent from learning degenerate b
 Limitations:
 - Large branching factor  
 - Limited planning depth  
-- Does not learn across episodes
+- Does not learn across episodes  
 
 ---
 
@@ -119,19 +119,20 @@ Limitations:
 
 Limitations:
 - Large state space  
-- Requires exact state matches 
+- Requires exact state matches  
 
 ---
 
 ### Deep Q-Network (DQN)
 
 - Neural network approximates Q-values  
+- Uses replay buffer and target network for stability  
 - Can generalize across similar states  
 
 Limitations:
-- Sparse rewards cause noisy updates  
-- Learning is unstable  
-- Requires significantly more training data 
+- Sparse rewards cause noisy and delayed updates  
+- Learning is unstable without sufficient data  
+- Requires significantly more training steps than tabular methods  
 
 ---
 
@@ -144,16 +145,22 @@ Limitations:
 Limitations:
 - On-policy (cannot reuse old data)  
 - Requires many environment interactions  
-- Higher computational cost 
+- Higher computational cost  
 
 ---
 
 ## Training Setup
 
-- ~50,000 episodes  
+- ~50,000 episodes (up to 500 steps per episode)  
 - Randomized obstacle placement each episode  
 - Episode ends on collision or full grid  
-- Training monitored using TensorBoard and console logs  
+- Training monitored using TensorBoard and console logs 
+
+Key hyperparameters (DQN):
+
+For DQN, we used Stable-Baselines3 with an MLP policy. Key hyperparameters included a learning rate of 1e-4, replay buffer size of 100,000, batch size of 64, discount factor 0.99, and target update interval of 1000. Exploration followed an epsilon-greedy strategy decaying to 0.05.
+
+The final DQN setup also used feature-based observations, reward shaping, and randomized reset seeds across episodes.
 
 ---
 
@@ -187,7 +194,7 @@ Observed behaviors during training:
 - Zigzagging between actions  
 - Wall-following behavior  
 - Circling to avoid collisions  
-- Food fixation (moving toward fruit without considering danger)  
+- Food fixation (moving toward food without considering danger)  
 
 To address these behaviors, we adjusted:
 
@@ -206,7 +213,7 @@ To address these behaviors, we adjusted:
 
 ### DQN Performance Explanation
 
-The DQN model underperformed compared to Tabular Q-learning and PPO primarily due to the combination of high-dimensional input and sparse reward signals. With limited training steps, the model does not receive sufficient consistent feedback to learn stable Q-value estimates.
+The DQN model underperformed compared to Tabular Q-learning and PPO due to the combination of high-dimensional input and sparse reward signals. Since rewards are delayed, it is difficult for the network to correctly attribute value to earlier actions. With limited training steps, the model does not receive sufficient consistent feedback to learn stable Q-value estimates, resulting in slow and unstable learning.
 
 ---
 
@@ -231,7 +238,7 @@ Tools:
 References:
 - Sutton & Barto, *Reinforcement Learning: An Introduction*  
 - Stable-Baselines3 Documentation  
-- OpenAI Gym Documentation  
+- OpenAI Gym / Gymnasium Documentation  
 
 AI Usage:
-- AI was used for debugging and data analysis  
+- AI tools (ChatGPT) were used to assist with debugging, understanding reinforcement learning concepts, and refining code structure.
