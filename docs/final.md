@@ -3,6 +3,7 @@ layout: default
 title: Final Report
 ---
 
+<!-- NOTE: INSERT FINAL VIDEO EMBED HERE -->
 
 # Project Summary
 
@@ -177,6 +178,7 @@ Limitations:
 | DQN | -0.58 | 12.8 | 3.6 | 12.22 mins |
 | PPO | 121.19 | 418.7 | 74.8 | 4.66 hours |
 
+PPO achieved the best performance among all tested methods. Its actor-critic structure and trajectory-based updates allow it to better handle delayed rewards and produce more stable learning, although at a higher computational cost.
 
 ---
 
@@ -196,15 +198,17 @@ To address these behaviors, we adjusted:
 - Collision penalties  
 - State representation  
 
-
 ---
 
 ## Failure Cases
 
 - Sparse rewards slow down learning  
-- DQN struggles with stability and convergence  
 - MCTS cannot handle long-term planning due to limited rollout depth  
 - Some agents prioritize survival over reward optimization  
+
+### DQN Performance Explanation
+
+The DQN model underperformed compared to Tabular Q-learning and PPO primarily due to the combination of high-dimensional input and sparse reward signals. With limited training steps, the model does not receive sufficient consistent feedback to learn stable Q-value estimates.
 
 ---
 
@@ -212,7 +216,6 @@ To address these behaviors, we adjusted:
 
 - Before training: random movement, frequent collisions  
 - After training: improved navigation, longer survival, better reward accumulation  
-
 
 ---
 
@@ -233,4 +236,4 @@ References:
 - OpenAI Gym Documentation  
 
 AI Usage:
-- AI was used for debugging and data analysis
+- AI was used for debugging and data analysis  
