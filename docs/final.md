@@ -3,6 +3,8 @@ layout: default
 title: Final Report
 ---
 
+## [Final Report Video](https://youtu.be/g8MRk_RCXvo)
+
 # Project Summary
 
 Snake is a game that requires planning, long-term reward optimization, and spatial reasoning. Although simple for humans, it is challenging for algorithms because the agent must balance immediate rewards with long-term survival while avoiding collisions and traps.
